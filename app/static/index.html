@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AirPlay 2 Receiver</title>
+<style>
+  :root{
+    --card:#121924;--card2:#0f1621;--line:#1e2a3a;--txt:#e8eef7;--dim:#8b9bb4;
+    --accent:#35d0c0;--accent2:#5b8cff;--ok:#2ecc71;--err:#ef5350;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 70% -10%,#162235 0%,#0a0e14 60%);
+    color:var(--txt);font-family:"Segoe UI",Tahoma,"Vazirmatn",sans-serif;min-height:100vh;padding:22px}
+  .wrap{max-width:1080px;margin:0 auto;display:grid;gap:16px}
+  header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  h1{font-size:20px;margin:0;font-weight:600}
+  h1 span{color:var(--accent)}
+  .pill{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;
+    background:#111a26;border:1px solid var(--line);font-size:13px;color:var(--dim)}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--dim)}
+  .dot.on{background:var(--ok);box-shadow:0 0 10px var(--ok)}
+  .dot.play{background:var(--accent);box-shadow:0 0 12px var(--accent);animation:pulse 1.6s infinite}
+  .dot.err{background:var(--err);box-shadow:0 0 10px var(--err)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .grid{display:grid;grid-template-columns:1.15fr .85fr;gap:16px}
+  @media(max-width:820px){.grid{grid-template-columns:1fr}}
+  .card{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--line);
+    border-radius:16px;padding:18px}
+  .card h2{font-size:14px;margin:0 0 14px;color:var(--dim);font-weight:600}
+  .np{display:flex;gap:16px;align-items:center}
+  .art{width:104px;height:104px;border-radius:12px;object-fit:cover;background:#0b1220;
+    border:1px solid var(--line);flex:0 0 auto;display:grid;place-items:center;color:#243247;font-size:34px}
+  .np .meta{min-width:0;flex:1}
+  .np .t{font-size:19px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .np .a{color:var(--accent);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .np .al{color:var(--dim);font-size:13px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bar{height:6px;background:#0b1220;border-radius:99px;margin-top:14px;overflow:hidden;border:1px solid #17202e}
+  .bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent2),var(--accent));
+    border-radius:99px;transition:width .6s linear}
+  .times{display:flex;justify-content:space-between;font-size:12px;color:var(--dim);margin-top:6px}
+  .volrow{display:flex;align-items:center;gap:14px}
+  .volrow .val{font-variant-numeric:tabular-nums;font-size:20px;font-weight:600;min-width:70px;text-align:center}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:99px;outline:none;
+    background:linear-gradient(90deg,var(--accent) 0%,var(--accent) var(--p,50%),#1b2635 var(--p,50%),#1b2635 100%)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;
+    background:#fff;border:3px solid var(--accent);cursor:pointer}
+  label{display:block;font-size:12.5px;color:var(--dim);margin:12px 0 6px}
+  input[type=text],input[type=password],select{width:100%;padding:10px 12px;border-radius:10px;background:#0b1220;
+    color:var(--txt);border:1px solid var(--line);font-family:inherit;font-size:14px;outline:none}
+  input:focus,select:focus{border-color:var(--accent2);box-shadow:0 0 0 3px rgba(91,140,255,.14)}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .row>*{flex:1;min-width:140px}
+  button{font-family:inherit;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;
+    border:1px solid var(--line);background:#16202e;color:var(--txt)}
+  button:hover{background:#1d2a3c}
+  button:disabled{opacity:.55;cursor:default}
+  button.primary{background:linear-gradient(180deg,#2fbfb2,#249e94);border-color:#2fbfb2;color:#062220;font-weight:600}
+  button.ghost{background:transparent}
+  button.danger{color:#ffb4b4;border-color:#3a2226;background:#1e1418}
+  .btns{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+  .hint{font-size:12px;color:var(--dim);line-height:1.75;margin-top:10px}
+  .badge{font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid #1f5f45;color:#8ff0c4;
+    background:#0e231b;margin-inline-start:6px}
+  pre{background:#080d14;border:1px solid var(--line);border-radius:10px;padding:12px;font-size:11.5px;
+    line-height:1.55;max-height:260px;overflow:auto;direction:ltr;text-align:left;color:#a9bdd6;
+    margin:0;white-space:pre-wrap}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td{padding:8px 4px;border-bottom:1px solid #17202e;vertical-align:middle}
+  td:last-child{text-align:left;width:1%}
+  .res-ok{color:#8ff0c4;font-size:12.5px;line-height:1.8}
+  .res-bad{color:#ff9a9a;font-size:12.5px;line-height:1.8}
+  details summary{cursor:pointer;color:var(--dim);font-size:13px}
+  .toast{position:fixed;inset-inline-start:50%;transform:translateX(50%);bottom:24px;background:#16202e;
+    border:1px solid var(--line);color:var(--txt);padding:11px 18px;border-radius:11px;font-size:13.5px;
+    opacity:0;pointer-events:none;transition:.25s;z-index:99;max-width:90vw}
+  .toast.show{opacity:1}
+  .toast.err{border-color:#5f2727;background:#241417}
+  .sep{height:1px;background:var(--line);margin:14px 0}
+  .lang{display:flex;gap:6px}
+  .lang button{padding:5px 10px;font-size:12px;border-radius:8px;opacity:.6}
+  .lang button.active{opacity:1;border-color:var(--accent);color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span data-i18n="appTitle">AirPlay 2</span> <span style="color:var(--dim);font-weight:400" data-i18n="panelTitle">Receiver — Control Panel</span></h1>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <div class="pill"><span class="dot" id="svcDot"></span><span id="svcText" data-i18n="statusChecking">Checking…</span></div>
+      <div class="lang">
+        <button id="langEn" data-lang="en">EN</button>
+        <button id="langFa" data-lang="fa">فارسی</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <h2 data-i18n="nowPlaying">Now Playing</h2>
+      <div class="np">
+        <img id="art" class="art" alt="" style="display:none">
+        <div id="artPh" class="art">♪</div>
+        <div class="meta">
+          <div class="t" id="npTitle">—</div>
+          <div class="a" id="npArtist" data-i18n="nothingPlaying">Nothing is playing</div>
+          <div class="al" id="npAlbum"></div>
+        </div>
+      </div>
+      <div class="bar"><i id="npBar"></i></div>
+      <div class="times"><span id="npPos">0:00</span><span id="npDur">0:00</span></div>
+      <div class="btns" style="margin-top:12px">
+        <button id="btnPrev" data-i18n="previous">⏮ Previous</button>
+        <button class="primary" id="btnPP" data-i18n="playPause">⏯ Play / Pause</button>
+        <button id="btnNext" data-i18n="next">⏭ Next</button>
+      </div>
+      <div class="sep"></div>
+      <div class="volrow">
+        <span style="font-size:19px">🔈</span>
+        <input id="vol" type="range" min="0" max="100" value="60">
+        <span class="val" id="volVal">60%</span>
+      </div>
+      <div class="hint" id="volHint"></div>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="settings">Settings</h2>
+      <label data-i18n="serverName">Server name (as shown in AirPlay)</label>
+      <input id="name" type="text" maxlength="50" placeholder="Zima AirPlay">
+
+      <label data-i18n="outputDevice">Audio output device</label>
+      <select id="device"></select>
+      <div class="hint" id="devHint"></div>
+
+      <div class="row">
+        <div>
+          <label data-i18n="serviceType">Service type</label>
+          <select id="service">
+            <option value="auto" data-i18n="svcAuto">Auto (AirPlay 2)</option>
+            <option value="airplay2" data-i18n="svcA2">AirPlay 2 only</option>
+            <option value="classic" data-i18n="svcClassic">Compatible (AirPlay 1)</option>
+          </select>
+        </div>
+        <div>
+          <label data-i18n="password">Password (optional)</label>
+          <input id="password" type="password" data-i18n-ph="noPassword" placeholder="No password">
+        </div>
+      </div>
+
+      <label data-i18n="delay">Sync delay with other audio systems (ms)</label>
+      <div class="volrow">
+        <input id="delay" type="range" min="-1000" max="1000" step="10" value="0">
+        <span class="val" id="delayVal">0</span>
+      </div>
+      <div class="hint" id="delayHint"></div>
+      <div class="btns" style="margin-top:8px">
+        <button class="ghost" data-lat="-50">−50</button>
+        <button class="ghost" data-lat="-100">−100</button>
+        <button class="ghost" data-lat="-150">−150</button>
+        <button class="ghost" data-lat="-200">−200</button>
+        <button class="ghost" data-lat="0">0</button>
+      </div>
+
+      <div class="btns">
+        <button class="primary" id="save" data-i18n="saveApply">Save &amp; apply</button>
+        <button class="ghost" id="delayReset" data-i18n="resetDelay">Reset delay</button>
+        <button id="testDev" data-i18n="testThis">Test this output</button>
+      </div>
+      <div class="hint" data-i18n="settingsNote">Changing name/device/delay restarts the service (a few seconds of silence).</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 data-i18n="outputHealth">Audio output health</h2>
+    <div id="dispInfo" class="hint" style="margin:0 0 10px"></div>
+    <table><tbody id="devTable"></tbody></table>
+    <div class="btns">
+      <button id="testAll" data-i18n="testAll">Test all outputs</button>
+      <button id="restart" data-i18n="restartSvc">Restart service</button>
+      <button class="danger ghost" id="stop" data-i18n="stopSvc">Stop</button>
+      <button class="ghost" id="start" data-i18n="startSvc">Start</button>
+    </div>
+    <div id="testOut" class="hint"></div>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary data-i18n="logsTitle">Service log (for troubleshooting)</summary>
+      <div class="btns"><button class="ghost" id="loadLogs" data-i18n="refreshLogs">Refresh log</button></div>
+      <pre id="logs">—</pre>
+      <div style="height:10px"></div>
+      <pre id="dlogs" style="max-height:140px">—</pre>
+    </details>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+var I18N = {
+  en: {
+    appTitle: "AirPlay 2", panelTitle: "Receiver — Control Panel",
+    statusChecking: "Checking…", statusStopped: "Service stopped", statusPlaying: "Playing",
+    statusIdle: "Ready (visible on network)", statusLost: "Panel unreachable",
+    nowPlaying: "Now Playing", nothingPlaying: "Nothing is playing", noArtist: "No artist",
+    srcSilent: "This source sends no metadata (audio and volume only)",
+    previous: "⏮ Previous", next: "⏭ Next", playPause: "⏯ Play / Pause",
+    volNone: "Volume cannot be controlled from the panel; use the sender.",
+    volAmixer: "Volume is applied to the mixer {note}.",
+    volDbus: "Volume is controlled through the Shairport Sync D-Bus interface.",
+    settings: "Settings", serverName: "Server name (as shown in AirPlay)", outputDevice: "Audio output device",
+    serviceType: "Service type", svcAuto: "Auto (AirPlay 2)", svcA2: "AirPlay 2 only", svcClassic: "Compatible (AirPlay 1)",
+    password: "Password (optional)", noPassword: "No password",
+    delay: "Sync delay with other audio systems (ms)",
+    resetDelay: "Reset delay", testThis: "Test this output", saveApply: "Save & apply",
+    settingsNote: "Changing name/device/delay restarts the service (a few seconds of silence).",
+    delayHintIdle: "Positive = later, negative = earlier. If this device sounds later than other speakers, use a negative value. 0 = default.",
+    delayHintPlaying: "Playing now; changing the slider asks for confirmation because the service restarts and playback stops (press Play again afterwards).",
+    outputHealth: "Audio output health", testAll: "Test all outputs", restartSvc: "Restart service",
+    stopSvc: "Stop", startSvc: "Start", testBtn: "Test", testingBtn: "Testing…",
+    testingAll: "Testing all outputs…", logsTitle: "Service log (for troubleshooting)", refreshLogs: "Refresh log",
+    displayConnected: "Connected display: <b>{list}</b> — the correct output is the one marked with ✓.",
+    displayNone: "No display/receiver detected on HDMI; nothing will be audible until it is connected.",
+    activeOutput: "Active output: {label} ({value})", noDisplayOnLine: "no display detected on this line",
+    connectedTo: "connected to {name}", noOutputSelected: "No output selected.",
+    toastTestOk: "Audio played on this output", toastError: "Error: {e}",
+    toastHealthy: "Output OK; audio played", toastAllStarted: "Testing all outputs…",
+    toastRestarted: "Service restarted", toastStopped: "Stopped", toastStarted: "Started",
+    toastDelayApplied: "Delay set to {v} ms", toastApplied: "Settings applied",
+    confirmStop: "Stop the AirPlay service?",
+    confirmDelay: "Applying {v} ms restarts the service: current playback (and any group) stops and you must press Play again. Continue?",
+    delayCancelled: "Cancelled", toastConnLost: "Panel unreachable"
+  },
+  fa: {
+    appTitle: "AirPlay 2", panelTitle: "گیرنده — پنل کنترل",
+    statusChecking: "در حال بررسی…", statusStopped: "سرویس متوقف است", statusPlaying: "در حال پخش",
+    statusIdle: "آماده (در شبکه دیده می‌شود)", statusLost: "ارتباط با پنل قطع شد",
+    nowPlaying: "در حال پخش", nothingPlaying: "موسیقی پخش نمی‌شود", noArtist: "بدون نام هنرمند",
+    srcSilent: "این منبع مشخصات/کاور نمی‌فرستد (فقط صدا و ولوم می‌آید)",
+    previous: "⏮ قبلی", next: "⏭ بعدی", playPause: "⏯ پخش / توقف",
+    volNone: "کنترل صدا از پنل در دسترس نیست؛ صدا را از فرستنده تنظیم کنید.",
+    volAmixer: "کنترل صدا روی میکسر {note} انجام می‌شود.",
+    volDbus: "کنترل صدا از طریق رابط D-Bus خود Shairport Sync انجام می‌شود.",
+    settings: "تنظیمات", serverName: "نام سرور (همان نامی که در AirPlay دیده می‌شود)", outputDevice: "کارت صدای خروجی",
+    serviceType: "نوع سرویس", svcAuto: "خودکار (AirPlay 2)", svcA2: "فقط AirPlay 2", svcClassic: "سازگار (AirPlay 1)",
+    password: "رمز (اختیاری)", noPassword: "بدون رمز",
+    delay: "تأخیر هم‌زمانی با سایر سیستم‌های صوتی (میلی‌ثانیه)",
+    resetDelay: "صفر کردن تأخیر", testThis: "تست همین خروجی", saveApply: "ذخیره و اعمال",
+    settingsNote: "تغییر نام/کارت صدا/تأخیر باعث راه‌اندازی مجدد سرویس می‌شود (چند ثانیه قطعی).",
+    delayHintIdle: "مثبت = عقب‌تر، منفی = جلوتر. اگر این دستگاه دیرتر از بلندگوهای دیگر است، مقدار منفی بدهید. ۰ = پیش‌فرض.",
+    delayHintPlaying: "در حال پخش است؛ با تغییر اسلایدر، تأیید می‌خواهد چون سرویس ری‌استارت و پخش قطع می‌شود (بعد دوباره Play بزنید).",
+    outputHealth: "سلامت خروجی صدا", testAll: "تست همه خروجی‌ها", restartSvc: "راه‌اندازی مجدد سرویس",
+    stopSvc: "توقف", startSvc: "شروع", testBtn: "تست صدا", testingBtn: "در حال تست…",
+    testingAll: "در حال تست همه خروجی‌ها…", logsTitle: "لاگ سرویس (برای عیب‌یابی)", refreshLogs: "به‌روزرسانی لاگ",
+    displayConnected: "نمایشگر متصل: <b>{list}</b> — خروجی درست همان خطی است که با ✓ مشخص شده.",
+    displayNone: "هیچ نمایشگر/گیرنده‌ای روی HDMI شناسایی نشد؛ تا اتصال برقرار نشود صدایی بیرون نمی‌آید.",
+    activeOutput: "خروجی فعال: {label} ({value})", noDisplayOnLine: "روی این خط نمایشگری شناسایی نشد",
+    connectedTo: "متصل به {name}", noOutputSelected: "خروجی انتخاب نشده است.",
+    toastTestOk: "صدا روی این خروجی پخش شد", toastError: "خطا: {e}",
+    toastHealthy: "خروجی سالم است؛ صدا پخش شد", toastAllStarted: "تست همه خروجی‌ها آغاز شد",
+    toastRestarted: "سرویس مجدداً راه‌اندازی شد", toastStopped: "متوقف شد", toastStarted: "شروع شد",
+    toastDelayApplied: "تأخیر روی {v} میلی‌ثانیه اعمال شد", toastApplied: "تنظیمات اعمال شد",
+    confirmStop: "سرویس AirPlay متوقف شود؟",
+    confirmDelay: "برای اعمال {v} میلی‌ثانیه، سرویس ری‌استارت می‌شود: پخش فعلی (و گروه) قطع می‌شود و باید دوباره Play بزنید. ادامه؟",
+    delayCancelled: "لغو شد", toastConnLost: "ارتباط با پنل قطع شد"
+  }
+};
+
+var LANG = localStorage.getItem("axp_lang") || "en";
+var $ = function (id) { return document.getElementById(id); };
+var dragging = false, lastArt = -1, volTimer = null;
+
+function t(key, vars) {
+  var s = (I18N[LANG] && I18N[LANG][key]) || (I18N.en[key] || key);
+  if (vars) {
+    Object.keys(vars).forEach(function (k) {
+      s = s.replace("{" + k + "}", vars[k]);
+    });
+  }
+  return s;
+}
+function applyLang() {
+  document.documentElement.lang = LANG;
+  document.documentElement.dir = (LANG === "fa") ? "rtl" : "ltr";
+  document.querySelectorAll("[data-i18n]").forEach(function (el) {
+    el.textContent = t(el.getAttribute("data-i18n"));
+  });
+  document.querySelectorAll("[data-i18n-ph]").forEach(function (el) {
+    el.placeholder = t(el.getAttribute("data-i18n-ph"));
+  });
+  document.querySelectorAll("[data-lang]").forEach(function (b) {
+    b.className = (b.getAttribute("data-lang") === LANG) ? "active" : "";
+  });
+  poll();
+}
+function setLang(l) {
+  LANG = l;
+  localStorage.setItem("axp_lang", l);
+  applyLang();
+}
+function fmt(s) {
+  s = Math.max(0, Math.round(s || 0));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+function toast(msg, isErr) {
+  var el = $("toast");
+  el.textContent = msg;
+  el.className = "toast show" + (isErr ? " err" : "");
+  clearTimeout(el._h);
+  el._h = setTimeout(function () { el.className = "toast"; }, 3400);
+}
+function api(path, opts) {
+  return fetch(path, opts).then(function (r) {
+    var ct = r.headers.get("content-type") || "";
+    return (ct.indexOf("json") >= 0 ? r.json() : r.text()).then(function (body) {
+      if (!r.ok) { throw new Error((body && body.error) || ("HTTP " + r.status)); }
+      return body;
+    });
+  });
+}
+function post(path, data) {
+  return api(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data || {})
+  });
+}
+function paintRange(el) {
+  var min = parseFloat(el.min), max = parseFloat(el.max), v = parseFloat(el.value);
+  el.style.setProperty("--p", (((v - min) / (max - min)) * 100) + "%");
+}
+function humanErr(res) {
+  var raw = (res && (res.stderr || res.error)) || "";
+  if (/busy/i.test(raw)) { return "Output is busy"; }
+  if (/No such device|Invalid argument/i.test(raw)) { return "Output unavailable"; }
+  return raw || "Unknown error";
+}
+
+function renderState(s) {
+  var svc = s.server, np = s.now_playing;
+  var running = svc.running, playing = (np.state === "playing");
+  $("svcDot").className = "dot " + (!running ? "err" : (playing ? "play" : "on"));
+  $("svcText").textContent = !running ? t("statusStopped") : (playing ? t("statusPlaying") : t("statusIdle"));
+
+  if (!dragging) {
+    var shown = (playing && s.volume.reported !== null && s.volume.reported !== undefined)
+      ? s.volume.reported : s.volume.app;
+    $("vol").value = shown;
+    $("volVal").textContent = shown + "%";
+    paintRange($("vol"));
+  }
+  if (svc.volume_mode === "none") { $("volHint").textContent = t("volNone"); }
+  else if (svc.volume_mode === "amixer") { $("volHint").textContent = t("volAmixer", { note: svc.volume_note || "" }); }
+  else { $("volHint").textContent = t("volDbus"); }
+
+  $("npTitle").textContent = np.title || "—";
+  if (np.artist) {
+    $("npArtist").textContent = np.artist;
+  } else if (playing) {
+    $("npArtist").textContent = (s.metadata_state === "source-silent") ? t("srcSilent") : t("noArtist");
+  } else {
+    $("npArtist").textContent = t("nothingPlaying");
+  }
+  $("npAlbum").textContent = np.album || "";
+
+  var pct = Math.max(0, Math.min(1, np.progress || 0));
+  $("npBar").style.width = (pct * 100).toFixed(1) + "%";
+  $("npDur").textContent = fmt(np.duration || 0);
+  $("npPos").textContent = fmt((np.duration || 0) * pct);
+
+  var art = $("art"), ph = $("artPh");
+  if (np.art_version > 0) {
+    if (np.art_version !== lastArt || art.style.display === "none") {
+      art.src = "/api/artwork?v=" + np.art_version;
+      art.style.display = "block";
+      ph.style.display = "none";
+      lastArt = np.art_version;
+    }
+  } else {
+    art.style.display = "none";
+    ph.style.display = "grid";
+  }
+
+  var sel = $("device"), cur = s.config.device;
+  var devSig = s.devices.map(function (d) { return d.value; }).join(",") + "|" + cur;
+  if (sel._sig !== devSig) {
+    sel._sig = devSig;
+    sel.innerHTML = "";
+    s.devices.forEach(function (d) {
+      var o = document.createElement("option");
+      o.value = d.value;
+      o.textContent = d.label + (d.connected === true ? ("  ✓ " + t("connectedTo", { name: d.display || "display" })) : "");
+      sel.appendChild(o);
+    });
+    sel.value = cur;
+  }
+  if (document.activeElement !== $("name")) { $("name").value = s.config.name; }
+  if (document.activeElement !== $("password")) { $("password").value = s.config.password || ""; }
+  if (document.activeElement !== $("service")) { $("service").value = s.config.service_type || "auto"; }
+  if (document.activeElement !== $("delay")) {
+    var dl = s.config.latency_offset_ms || 0;
+    $("delay").value = dl;
+    $("delayVal").textContent = (dl > 0 ? "+" : "") + dl;
+    paintRange($("delay"));
+  }
+  $("delayHint").textContent = playing ? t("delayHintPlaying") : t("delayHintIdle");
+
+  var disp = s.displays || [];
+  $("dispInfo").innerHTML = disp.length
+    ? t("displayConnected", { list: disp.join(", ") })
+    : t("displayNone");
+
+  var cd = s.current_device;
+  $("devHint").textContent = cd
+    ? (t("activeOutput", { label: cd.label, value: cd.value }) +
+       (cd.connected === true ? (" — " + t("connectedTo", { name: cd.display || "display" })) : (" — " + t("noDisplayOnLine"))))
+    : t("noOutputSelected");
+
+  var tb = $("devTable");
+  tb.innerHTML = "";
+  s.devices.forEach(function (d) {
+    var tr = document.createElement("tr");
+    var left = document.createElement("td");
+    var badge = d.connected === true ? ('<span class="badge">✓ ' + (d.display || "connected") + "</span>") : "";
+    left.innerHTML = d.label + " " + badge +
+      '<div style="color:#66788f;font-size:11.5px;direction:ltr">' + d.value + "</div>";
+    var right = document.createElement("td");
+    var b = document.createElement("button");
+    b.textContent = t("testBtn");
+    b.onclick = function () {
+      b.disabled = true;
+      b.textContent = t("testingBtn");
+      post("/api/action", { action: "test-device", device: d.value }).then(function (r) {
+        var res = r.result || {};
+        toast(res.ok ? t("toastTestOk") : t("toastError", { e: humanErr(res) }), !res.ok);
+      }).catch(function (e) {
+        toast(e.message, true);
+      }).then(function () {
+        b.disabled = false;
+        b.textContent = t("testBtn");
+      });
+    };
+    right.appendChild(b);
+    tr.appendChild(left);
+    tr.appendChild(right);
+    tb.appendChild(tr);
+  });
+
+  if (s.test && s.test.running) {
+    $("testOut").textContent = t("testingAll");
+  } else if (s.test && s.test.results.length) {
+    $("testOut").innerHTML = s.test.results.map(function (r) {
+      return '<div class="' + (r.ok ? "res-ok" : "res-bad") + '">' + (r.ok ? "✓" : "✗") + " " +
+        (r.label || r.device) + " — " + (r.ok ? ("OK (" + r.elapsed_ms + "ms)") : humanErr(r)) + "</div>";
+    }).join("");
+  }
+}
+
+function poll() {
+  api("/api/state").then(renderState).catch(function () {
+    $("svcDot").className = "dot err";
+    $("svcText").textContent = t("statusLost");
+  });
+}
+
+function applyDelay(v) {
+  post("/api/config", { latency_offset_ms: v }).catch(function (e) {
+    if (/Play|قطع/.test(e.message)) {
+      if (confirm(t("confirmDelay", { v: v }))) {
+        return post("/api/config", { latency_offset_ms: v, force: true });
+      }
+      throw new Error(t("delayCancelled"));
+    }
+    throw e;
+  }).then(function (r) {
+    if (!r) { return; }
+    toast(t("toastDelayApplied", { v: v }));
+    if (r.state) { renderState(r.state); }
+  }).catch(function (e) {
+    if (e.message !== t("delayCancelled")) { toast(e.message, true); }
+    poll();
+  });
+}
+
+$("vol").addEventListener("input", function () {
+  dragging = true;
+  var v = $("vol").value;
+  $("volVal").textContent = v + "%";
+  paintRange($("vol"));
+  clearTimeout(volTimer);
+  volTimer = setTimeout(function () {
+    post("/api/volume", { volume: parseInt(v, 10) }).catch(function (e) { toast(e.message, true); });
+  }, 140);
+});
+$("vol").addEventListener("change", function () {
+  dragging = false;
+  post("/api/volume", { volume: parseInt($("vol").value, 10) }).then(function (r) {
+    if (!r.ok) { toast("Volume failed (" + r.mode + ")", true); }
+  }).catch(function (e) { toast(e.message, true); });
+});
+$("delay").addEventListener("input", function () {
+  var v = parseInt($("delay").value, 10);
+  $("delayVal").textContent = (v > 0 ? "+" : "") + v;
+  paintRange($("delay"));
+});
+$("delay").addEventListener("change", function () {
+  applyDelay(parseInt($("delay").value, 10));
+});
+$("delayReset").onclick = function () {
+  $("delay").value = 0;
+  $("delayVal").textContent = "0";
+  paintRange($("delay"));
+};
+document.querySelectorAll("button[data-lat]").forEach(function (b) {
+  b.onclick = function () {
+    var v = parseInt(b.getAttribute("data-lat"), 10);
+    $("delay").value = v;
+    $("delayVal").textContent = (v > 0 ? "+" : "") + v;
+    paintRange($("delay"));
+    applyDelay(v);
+  };
+});
+
+$("save").onclick = function () {
+  var body = {
+    name: $("name").value,
+    device: $("device").value,
+    service_type: $("service").value,
+    password: $("password").value,
+    latency_offset_ms: parseInt($("delay").value, 10)
+  };
+  $("save").disabled = true;
+  post("/api/config", body).then(function (r) {
+    toast(r.restarted ? t("toastRestarted") : t("toastApplied"));
+    if (r.state) { renderState(r.state); }
+  }).catch(function (e) {
+    toast(e.message, true);
+  }).then(function () {
+    $("save").disabled = false;
+  });
+};
+
+$("testDev").onclick = function () {
+  $("testDev").disabled = true;
+  post("/api/action", { action: "test-device", device: $("device").value }).then(function (r) {
+    var res = r.result || {};
+    toast(res.ok ? t("toastHealthy") : t("toastError", { e: humanErr(res) }), !res.ok);
+  }).catch(function (e) { toast(e.message, true); }).then(function () {
+    $("testDev").disabled = false;
+  });
+};
+
+function transport(action) {
+  post("/api/action", { action: action }).then(function (r) {
+    if (!r.ok) { toast(r.msg || "failed", true); }
+    if (r.state) { renderState(r.state); }
+  }).catch(function (e) { toast(e.message, true); });
+}
+$("btnPP").onclick = function () { transport("playpause"); };
+$("btnNext").onclick = function () { transport("next"); };
+$("btnPrev").onclick = function () { transport("previous"); };
+
+$("testAll").onclick = function () {
+  post("/api/action", { action: "test-all" }).then(function () {
+    toast(t("toastAllStarted"));
+    poll();
+  }).catch(function (e) { toast(e.message, true); });
+};
+$("restart").onclick = function () {
+  post("/api/action", { action: "restart" }).then(function (r) {
+    toast(r.ok ? t("toastRestarted") : r.msg, !r.ok);
+  }).catch(function (e) { toast(e.message, true); });
+};
+$("stop").onclick = function () {
+  if (!confirm(t("confirmStop"))) { return; }
+  post("/api/action", { action: "stop" }).then(function () {
+    toast(t("toastStopped"));
+    poll();
+  }).catch(function (e) { toast(e.message, true); });
+};
+$("start").onclick = function () {
+  post("/api/action", { action: "start" }).then(function (r) {
+    toast(r.ok ? t("toastStarted") : r.msg, !r.ok);
+    poll();
+  }).catch(function (e) { toast(e.message, true); });
+};
+$("loadLogs").onclick = function () {
+  api("/api/logs").then(function (r) {
+    $("logs").textContent = r.log || "(empty)";
+    $("dlogs").textContent = (r.diag || "") + "\n\n--- raw metadata ---\n" + (r.raw || "");
+  }).catch(function (e) { toast(e.message, true); });
+};
+
+$("langEn").onclick = function () { setLang("en"); };
+$("langFa").onclick = function () { setLang("fa"); };
+
+setInterval(poll, 2000);
+applyLang();
+$("loadLogs").click();
+</script>
+</body>
+</html>

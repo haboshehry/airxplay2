@@ -1,0 +1,17 @@
+services:
+  airxplay2:
+    build: .
+    image: airxplay2:latest
+    container_name: airxplay2
+    network_mode: host
+    restart: unless-stopped
+    cap_add:
+      - SYS_NICE          # required by NQPTP for AirPlay 2 timing
+    volumes:
+      - /dev/snd:/dev/snd                 # playback devices
+      - /proc/asound:/host/asound:ro      # PCM list + HDMI/ELD detection
+      - ./data:/data                      # settings, logs, cover art
+    environment:
+      - PANEL_PORT=8090
+      # - ENABLE_AVAHI=1
+      # - ENABLE_NQPTP=1
