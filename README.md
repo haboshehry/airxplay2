@@ -172,6 +172,18 @@ docker exec -it AirxPlay2 sh -c 'tail -20 /data/diag.log'
 ZimaOS ships a Docker CLI **without `docker build`**. Use the commit-based helper
 (`./build_image.sh`) or build the image on another machine and push it.
 
+To show the service in the ZimaOS app list (like the other apps), install it through the
+panel instead of `deploy.sh`:
+
+1. App Store → **My Apps** → **Install Custom App** → **YAML** tab
+2. Paste [`casaos-app.yml`](casaos-app.yml) (it already contains the required
+   `x-casaos` block: `title.custom`, `main`, `scheme`, `hostname`, `index`, `port_map`)
+3. Install — ZimaOS then creates and manages the container itself.
+
+The YAML must keep `devices: - /dev/snd:/dev/snd`; without it Shairport exits with
+`output_device_error_19`. After that, use the ZimaOS panel for start/stop and
+`deploy.sh` only on non-ZimaOS hosts.
+
 Also note the container must use `network_mode: host` (mDNS + AirPlay ports) and
 needs `SYS_NICE` for AirPlay 2 timing (NQPTP).
 
