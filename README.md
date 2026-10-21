@@ -1,4 +1,4 @@
-# AirXPlay2 — AirPlay 2 audio receiver with a web panel
+# AirxPlay2 — AirPlay 2 audio receiver with a web panel
 
 A self-contained AirPlay 2 receiver for Linux/Docker hosts: **Shairport Sync 5.6**
 (AirPlay 2, NQPTP, Avahi) plus a small **web control panel** and a **CLI**.
@@ -17,7 +17,7 @@ AirPlay containers end up silent or unadjustable.
 
 ```bash
 git clone https://github.com/haboshehry/airxplay2.git
-cd airxplay2
+cd AirxPlay2
 
 # 1. host prerequisites: the container needs the sound device and host networking
 ls /dev/snd            # must exist
@@ -31,9 +31,9 @@ docker compose up -d --build
 
 ```yaml
 services:
-  airxplay2:
+  AirxPlay2:
     build: .
-    container_name: airxplay2
+    container_name: AirxPlay2
     network_mode: host
     restart: unless-stopped
     cap_add: [SYS_NICE]
@@ -49,23 +49,23 @@ If port `8090` is busy, change `PANEL_PORT`.
 
 ## CLI
 
-`cli/airxplay2` wraps the HTTP API so you can script it:
+`cli/AirxPlay2` wraps the HTTP API so you can script it:
 
 ```bash
-./cli/airxplay2 status                 # service + session state
-./cli/airxplay2 devices                # list playback PCMs, marks the live HDMI one
-./cli/airxplay2 test                   # play a test tone on the selected output
-./cli/airxplay2 test-all               # test every output one by one
-./cli/airxplay2 name "Living Room"     # rename (restarts the service)
-./cli/airxplay2 device plughw:CARD=PCH,DEV=3
-./cli/airxplay2 volume 40              # 0-100
-./cli/airxplay2 delay -150             # ms, negative = earlier output
-./cli/airxplay2 play | pause | next | previous
-./cli/airxplay2 restart | stop | start
-./cli/airxplay2 logs
+./cli/AirxPlay2 status                 # service + session state
+./cli/AirxPlay2 devices                # list playback PCMs, marks the live HDMI one
+./cli/AirxPlay2 test                   # play a test tone on the selected output
+./cli/AirxPlay2 test-all               # test every output one by one
+./cli/AirxPlay2 name "Living Room"     # rename (restarts the service)
+./cli/AirxPlay2 device plughw:CARD=PCH,DEV=3
+./cli/AirxPlay2 volume 40              # 0-100
+./cli/AirxPlay2 delay -150             # ms, negative = earlier output
+./cli/AirxPlay2 play | pause | next | previous
+./cli/AirxPlay2 restart | stop | start
+./cli/AirxPlay2 logs
 ```
 
-Point it elsewhere with `AXP_URL=http://192.168.1.20:8090 ./cli/airxplay2 status`.
+Point it elsewhere with `AXP_URL=http://192.168.1.20:8090 ./cli/AirxPlay2 status`.
 
 ## How it works
 
@@ -81,7 +81,7 @@ AirPlay sender ──▶ shairport-sync ──▶ ALSA (plughw:CARD=…,DEV=…)
 | `app/main.py` | supervisor + HTTP/JSON API + ALSA/mDNS/D-Bus integration |
 | `app/static/index.html` | panel UI (EN/FA), polling `/api/state` |
 | `start.sh` | container entrypoint: D-Bus, Avahi, NQPTP, then the panel |
-| `cli/airxplay2` | CLI over the HTTP API |
+| `cli/AirxPlay2` | CLI over the HTTP API |
 
 The panel supervises `shairport-sync` itself (restart on crash, log rotation),
 so no init system is required inside the container.
@@ -91,7 +91,7 @@ so no init system is required inside the container.
 ### Volume
 
 Many HDMI outputs expose **no mixer control at all** (only an IEC958 switch), so
-hardware volume is impossible. AirXPlay2 therefore drives Shairport Sync's own
+hardware volume is impossible. AirxPlay2 therefore drives Shairport Sync's own
 software mixer over D-Bus (`RemoteControl.SetAirplayVolume`). The panel slider and
 the sender's slider stay in step; the value shown is the one the live session
 reports.
@@ -151,7 +151,7 @@ during playback; resend the same body with `"force": true` to apply it anyway.
 
 | Symptom | Cause / fix |
 |---|---|
-| Visible in AirPlay but silent | Display is on another HDMI PCM — run `cli/airxplay2 devices` and pick the row marked `✓` |
+| Visible in AirPlay but silent | Display is on another HDMI PCM — run `cli/AirxPlay2 devices` and pick the row marked `✓` |
 | `Output is busy` on test | Something else holds the PCM (the service while playing); use *test all* which stops it briefly |
 | No display detected | `HDMI` with no sink produces no audio at all; check the cable/TV input |
 | Still late after −400 ms | TV processing is heavy: `Sound Mode = Game/Standard`, `AV Sync = 0`, PCM instead of Dolby |
@@ -161,9 +161,9 @@ during playback; resend the same body with `"force": true` to apply it anyway.
 Logs:
 
 ```bash
-docker logs --tail 50 airxplay2
-docker exec -it airxplay2 sh -c 'tail -50 /data/shairport.log'
-docker exec -it airxplay2 sh -c 'tail -20 /data/diag.log'
+docker logs --tail 50 AirxPlay2
+docker exec -it AirxPlay2 sh -c 'tail -50 /data/shairport.log'
+docker exec -it AirxPlay2 sh -c 'tail -20 /data/diag.log'
 ```
 
 ## ZimaOS / ZimaCube

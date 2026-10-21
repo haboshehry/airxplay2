@@ -1,0 +1,51 @@
+name: airplay2
+services:
+  airxplay2:
+    container_name: airplay2
+    image: zima-airplay2:1.0
+    network_mode: host
+    restart: unless-stopped
+    pull_policy: never
+    cap_add:
+      - SYS_NICE
+    volumes:
+      - type: bind
+        source: /dev/snd
+        target: /dev/snd
+      - type: bind
+        source: /proc/asound
+        target: /host/asound
+        read_only: true
+      - type: bind
+        source: /DATA/AppData/airplay2/data
+        target: /data
+    environment:
+      PANEL_PORT: "8090"
+    labels:
+      io.zimaos.app.id: zimaapp://v2app/airplay2
+    x-casaos:
+      architectures:
+        - amd64
+        - arm64
+      main: airxplay2
+      author: haboshehry
+      developer: haboshehry
+      category: Media
+      scheme: http
+      index: /
+      port_map: "8090"
+      store_app_id: airplay2
+      version: "1.0"
+      title:
+        en_US: AirxPlay2
+        fa_IR: AirxPlay2
+      description:
+        en_US: AirPlay 2 audio receiver with a bilingual web panel, CLI and sync delay.
+        fa_IR: گیرنده صوتی AirPlay 2 با پنل وب دوزبانه، CLI و تنظیم تأخیر هم‌زمانی.
+      tagline:
+        en_US: AirPlay 2 receiver + control panel
+        fa_IR: گیرنده AirPlay 2 + پنل کنترل
+      tips:
+        before_install:
+          en_US: The host must expose /dev/snd. AirPlay 2 needs host networking.
+          fa_IR: میزبان باید /dev/snd را ارائه دهد. AirPlay 2 به شبکه host نیاز دارد.
