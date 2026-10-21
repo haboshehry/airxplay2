@@ -8,6 +8,11 @@ services:
     pull_policy: never
     cap_add:
       - SYS_NICE
+    # Without device access Shairport Sync exits with output_device_error_19.
+    devices:
+      - /dev/snd:/dev/snd
+    device_cgroup_rules:
+      - "c 116:* rwm"
     volumes:
       - type: bind
         source: /dev/snd

@@ -157,6 +157,7 @@ during playback; resend the same body with `"force": true` to apply it anyway.
 | Still late after −400 ms | TV processing is heavy: `Sound Mode = Game/Standard`, `AV Sync = 0`, PCM instead of Dolby |
 | Metadata missing | Depends on the sender. The panel says so explicitly when only volume arrives |
 | Group drops out | See "Output device pinning"; also make sure NQPTP owns UDP 319/320 |
+| Shairport exits: `output_device_error_19` | The container has no device access. It must be created with `--device /dev/snd` (the bind mount alone is not enough) |
 
 Logs:
 
