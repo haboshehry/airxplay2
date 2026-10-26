@@ -882,6 +882,14 @@ class Supervisor:
             except Exception as e:
                 diag("spawn failed: %r" % (e,))
                 return False, "spawn failed: %s" % e
+            # AirPlay 2 group timing is PTP-driven: without realtime scheduling
+            # the NQPTP timing thread gets preempted and groups fail to form
+            # (they only succeed on retry). Best effort, needs SYS_NICE.
+            try:
+                os.sched_setscheduler(self.proc.pid, os.SCHED_FIFO, os.sched_param(20))
+                diag("shairport-sync promoted to SCHED_FIFO priority 20")
+            except Exception as e:
+                diag("realtime promotion failed: %r" % (e,))
             self.started_at = time.time()
             self.wanted = True
             diag("shairport-sync started pid=%s" % self.proc.pid)
