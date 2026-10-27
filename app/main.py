@@ -10,6 +10,7 @@ import os
 import plistlib
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -38,7 +39,7 @@ DEFAULTS = {
     "port": 0,
     "volume_range_db": 60,
     "latency_offset_ms": 0,   # + delays, - advances; syncs with other speakers
-    "stable_44k": True,       # pin 44.1k/S16/stereo so groups don't drop out
+    "stable_44k": True,       # pin the *output* to 48k/S16/stereo (never restrict the input)
     "verbose": False,         # -v on shairport-sync, for deep diagnosis
     "interpolation": "auto",
     "autostart": True,
@@ -782,11 +783,13 @@ def write_config():
         "\taudio_backend_buffer_desired_length_in_seconds = 0.4;",
     ]
     if snap.get("stable_44k", True):
-        # AirPlay 2 groups often switch the stream to 48k/lossless/surround.
-        # Those switches force an HDMI re-negotiation that can fail while the
-        # display holds the PCM, which drops the receiver out of the group.
+        # An iPhone sends 48k AAC in AirPlay 2, and a group (iPhone + other
+        # AirPlay 2 speakers) is negotiated at 48k. Advertising "44.1k only"
+        # makes the sender accept this receiver, then drop it the moment the
+        # group is formed -- playback stops with an error on the phone.
+        # So keep every input format (44.1k included) reachable and pin only
+        # the *output* side to one fixed rate, see the alsa section below.
         lines += [
-            "\tairplay_2_44100_only_mode = \"on\";",
             "\tlossless_mode = \"off\";",
             "\tsix_channel_mode = \"off\";",
             "\teight_channel_mode = \"off\";",
@@ -803,11 +806,14 @@ def write_config():
         '\toutput_device = "%s";' % _esc(dev),
     ]
     if snap.get("stable_44k", True):
-        # One fixed rate/format keeps the HDMI PCM open across sessions.
+        # One fixed rate/format keeps the HDMI PCM at a single rate, so a
+        # session start or a group join never re-negotiates the HDMI link.
+        # 48000 is what the sink (TV) and every AirPlay 2 sender agree on;
+        # 44.1k input is resampled internally.
         lines += [
-            '\toutput_rate = 44100;',
+            "\toutput_rate = 48000;",
             '\toutput_format = "S16_LE";',
-            '\toutput_channels = 2;',
+            "\toutput_channels = 2;",
         ]
     else:
         lines += [
@@ -861,11 +867,46 @@ class Supervisor:
             threading.Thread(target=metadata_reader, daemon=True).start()
             self._reader_started = True
 
+    def reap_strays(self):
+        """Kill shairport-sync processes this panel does not own.
+
+        A second instance cannot bind RTSP port 7000, but it does publish a
+        duplicate mDNS service and pushes its own timing requests into NQPTP,
+        which corrupts the PTP clock table. The sender then sees two receivers
+        with the same name and drops both out of an AirPlay 2 group. Leftovers
+        can appear after a manual debugging run, so reap them defensively.
+        """
+        mine = self.proc.pid if (self.proc and self.proc.poll() is None) else None
+        killed = []
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            pid = int(entry)
+            if pid in (mine, os.getpid()):
+                continue
+            try:
+                with open("/proc/%d/cmdline" % pid, "rb") as f:
+                    cmd = f.read().decode("utf-8", "replace")
+            except Exception:
+                continue
+            if "shairport-sync" not in cmd or "main.py" in cmd:
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+                killed.append(pid)
+            except Exception:
+                pass
+        if killed:
+            diag("reaped stray shairport-sync processes: %s" % killed)
+            time.sleep(0.5)
+        return killed
+
     def start(self):
         with self.lock:
             if self.proc and self.proc.poll() is None:
                 return False, "already running"
             self._ensure_pipe()
+            self.reap_strays()
             write_config()
             try:
                 if os.path.getsize(LOG_PATH) > 1_000_000:

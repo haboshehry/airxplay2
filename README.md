@@ -112,24 +112,49 @@ Constraints worth knowing:
 - The compensating range is bounded by `audio_backend_buffer_desired_length_in_seconds`
   (0.4 s by default → about −400 ms).
 
-### Output device pinning
+### Output format pinning
 
-For stable grouping, the generated config pins the ALSA side:
+An iPhone streams **48 kHz AAC** in AirPlay 2, and an AirPlay 2 group (iPhone plus
+other speakers) is negotiated at 48 kHz. Advertising "44.1 kHz only" makes the
+sender accept the receiver and then drop it the moment the group is formed — the
+phone shows a playback error. So the panel never restricts the *input* format; it
+only pins the *output* side to one fixed rate/format:
 
 ```ini
-airplay_2_44100_only_mode = "on";   # no 48k/lossless/surround switching
-lossless_mode = "off";
+lossless_mode = "off";        # no lossless/surround switching
 six_channel_mode = "off";
 eight_channel_mode = "off";
-output_rate = 44100;
+output_rate = 48000;          # fixed ALSA/HDMI rate: one negotiation, ever
 output_format = "S16_LE";
 output_channels = 2;
 ```
 
-A group switch to 48k/lossless forces an HDMI re‑negotiation that can fail while the
-display holds the PCM, dropping the receiver out of the group. Set
-`{"stable_44k": false}` through `POST /api/config` (or `cli` config) to get the
+Everything 44.1 kHz is still accepted and resampled internally. Pinning the output
+keeps the HDMI link at a single rate, so starting a stream or joining a group never
+re‑negotiates HDMI while the display holds the PCM. Check that the sink supports
+48 kHz first:
+
+```bash
+aplay -D hw:CARD=PCH,DEV=3 --dump-hw-params -t raw -f S16_LE -r 48000 -c 2 /dev/zero
+```
+
+Set `{"stable_44k": false}` through `POST /api/config` (or `cli` config) to get the
 "auto" behaviour back at the cost of that stability.
+
+### One instance only
+
+AirPlay 2 timing is fragile: a second `shairport-sync` cannot bind port 7000 but
+still publishes a duplicate mDNS service, and a second `nqptp` corrupts the PTP
+clock table (`NQPTP clock information is not valid`, then a sender that leaves the
+group). `start.sh` kills any stale `nqptp` before starting one, and
+`Supervisor.reap_strays()` kills `shairport-sync` processes the panel does not own
+before every start. If you ever see two entries with the same name in the AirPlay
+menu, check with:
+
+```bash
+docker top airplay2 -eo pid,comm,args | grep -E "shairport|nqptp"
+```
+
 
 ## HTTP API
 
@@ -156,7 +181,7 @@ during playback; resend the same body with `"force": true` to apply it anyway.
 | No display detected | `HDMI` with no sink produces no audio at all; check the cable/TV input |
 | Still late after −400 ms | TV processing is heavy: `Sound Mode = Game/Standard`, `AV Sync = 0`, PCM instead of Dolby |
 | Metadata missing | Depends on the sender. The panel says so explicitly when only volume arrives |
-| Group drops out | See "Output device pinning"; also make sure NQPTP owns UDP 319/320 |
+| Group drops out | See "Output format pinning" (never 44.1-only) and "One instance only"; also make sure NQPTP owns UDP 319/320 |
 | Shairport exits: `output_device_error_19` | The container has no device access. It must be created with `--device /dev/snd` (the bind mount alone is not enough) |
 
 Logs:
