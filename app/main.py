@@ -781,6 +781,11 @@ def write_config():
         "\tvolume_range_db = %d;" % int(snap.get("volume_range_db") or 60),
         "\taudio_backend_latency_offset_in_seconds = %.3f;" % (int(snap.get("latency_offset_ms") or 0) / 1000.0),
         "\taudio_backend_buffer_desired_length_in_seconds = 0.4;",
+        # AirPlay 2 groups whose clock master flips between members (e.g. a
+        # Sonos and an Apple device) used to force a hard resync on every flip
+        # and cut the audio. Tolerate a wider error before resyncing.
+        "\tresync_threshold_in_seconds = 0.25;",
+        "\tdrift_tolerance_in_seconds = 0.005;",
     ]
     if snap.get("stable_44k", True):
         # An iPhone sends 48k AAC in AirPlay 2, and a group (iPhone + other
