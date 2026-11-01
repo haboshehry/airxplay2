@@ -22,6 +22,7 @@ services:
 x-casaos:
   title:
     custom: AirxPlay2
+  icon: https://raw.githubusercontent.com/haboshehry/airxplay2/main/assets/icon-512.png
   main: airxplay2
   scheme: http
   hostname: 192.168.68.112

@@ -212,6 +212,30 @@ The YAML must keep `devices: - /dev/snd:/dev/snd`; without it Shairport exits wi
 Also note the container must use `network_mode: host` (mDNS + AirPlay ports) and
 needs `SYS_NICE` for AirPlay 2 timing (NQPTP).
 
+### App icon
+
+`x-casaos.icon` in [`casaos-app.yml`](casaos-app.yml) points at the hosted PNG
+(`assets/icon-512.png`). The ZimaOS panel's **Custom icon url** field accepts a URL
+only — a local path such as `C:\...\logo.bmp` is rejected and nothing is saved.
+
+| File | Use |
+| --- | --- |
+| `assets/icon-512.png` | primary icon: black tile, white mark (opaque) |
+| `assets/icon-256.png` | smaller list/table icon |
+| `assets/icon-rounded-512.png` | pre-rounded corners |
+| `assets/icon-transparent-512.png` | white mark on transparent (dark themes) |
+| `assets/icon-onwhite-512.png` | black mark on white (light themes) |
+
+Raw URL used by the panel:
+
+```
+https://raw.githubusercontent.com/haboshehry/airxplay2/main/assets/icon-512.png
+```
+
+If the icon does not appear in **My Apps** after saving it in the panel, the
+`x-casaos.icon` key is missing from the app's compose file — the dashboard tile reads
+the panel setting, while the My Apps row reads the compose metadata.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
