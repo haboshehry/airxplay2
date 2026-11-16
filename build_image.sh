@@ -13,7 +13,10 @@ echo "== copying app"
 docker cp "$DIR/app" a2build:/app
 docker cp "$DIR/start.sh" a2build:/start-panel.sh
 docker start a2build >/dev/null
+docker exec a2build cp -a /usr/local/bin/nqptp /usr/local/bin/nqptp.orig 2>/dev/null || true
+if [ -f "$DIR/nqptp" ]; then docker cp "$DIR/nqptp" a2build:/usr/local/bin/nqptp; fi
 docker exec a2build chmod +x /start-panel.sh
+docker exec a2build chmod +x /usr/local/bin/nqptp 2>/dev/null || true
 docker exec a2build mkdir -p /data
 docker stop a2build >/dev/null
 

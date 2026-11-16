@@ -11,11 +11,14 @@ import plistlib
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import threading
 import time
 from collections import deque
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+
+import rtprio
 
 DATA = "/data"
 APP = "/app"
@@ -40,6 +43,7 @@ DEFAULTS = {
     "volume_range_db": 60,
     "latency_offset_ms": 0,   # + delays, - advances; syncs with other speakers
     "stable_44k": True,       # pin the *output* to 48k/S16/stereo (never restrict the input)
+    "bind_address": "",       # "" = auto-detect the LAN IPv4 and bind RTSP to it
     "verbose": False,         # -v on shairport-sync, for deep diagnosis
     "interpolation": "auto",
     "autostart": True,
@@ -666,6 +670,260 @@ def best_effort_metadata(obj, depth=0):
 NP = NowPlaying()
 
 
+def mpris_status(timeout=4):
+    """PlaybackStatus from shairport's MPRIS interface ("playing"/"paused"/"stopped").
+
+    The metadata pipe is not a reliable "is a session live?" signal: a sender in
+    an AirPlay 2 group may send audio to this receiver while the metadata (and
+    therefore ``NP``'s state) stays empty or goes stale. Deciding "idle" from
+    metadata made the panel restart shairport in the middle of grouped playback,
+    which drops the receiver out of the group. MPRIS reflects the real player.
+    """
+    if not shutil.which("dbus-send"):
+        return None
+    try:
+        p = subprocess.run(
+            ["dbus-send", "--system", "--print-reply",
+             "--dest=org.mpris.MediaPlayer2.ShairportSync",
+             "/org/mpris/MediaPlayer2",
+             "org.freedesktop.DBus.Properties.Get",
+             "string:org.mpris.MediaPlayer2.Player",
+             "string:PlaybackStatus"],
+            capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        return None
+    if p.returncode != 0:
+        return None
+    m = re.search(r'variant\s+string\s+"?([A-Za-z]+)"?', p.stdout or "")
+    return m.group(1).lower() if m else None
+
+
+class SessionWatch:
+    """Follow shairport's log to know whether a session is really playing.
+
+    MPRIS cannot be trusted here: during an AirPlay 2 *group member* session
+    (buffered audio) it kept reporting "Stopped" while audio was playing, and
+    the metadata pipe can stay empty because the sender talks to this receiver
+    on a non-principal connection. The log is the only signal that matches
+    reality, and reading only the bytes appended since the last poll is cheap.
+
+    It also counts "clock change" lines per session: a mixed Apple + Sonos
+    group flips the PTP grandmaster every few seconds, and shairport's session
+    state / NQPTP mapping does not always survive that. The count lets the
+    watchdog reset the receiver between such sessions instead of leaving a
+    half-broken state behind (which made the *next* group join fail).
+    """
+
+    def __init__(self):
+        self.pos = None
+        self.live = False
+        self.started = 0.0
+        self.clocks = 0
+        self.stopped = 0.0
+        self.last_reset = 0.0
+        self.lock = threading.Lock()
+
+    def poll(self):
+        with self.lock:
+            try:
+                size = os.path.getsize(LOG_PATH)
+            except Exception:
+                return self.live
+            if self.pos is None:
+                self.pos = size
+                return self.live
+            if size < self.pos:          # rotated
+                self.pos = 0
+            if size == self.pos:
+                return self.live
+            try:
+                with open(LOG_PATH, "rb") as f:
+                    f.seek(self.pos)
+                    chunk = f.read(size - self.pos)
+                self.pos = size
+            except Exception:
+                return self.live
+            for line in chunk.decode("utf-8", "replace").splitlines():
+                if "clock change from:" in line:
+                    self.clocks += 1
+                elif ("player_play." in line or "RECORD (AP2)" in line
+                      or "Start playing, with anchor clock" in line):
+                    if not self.live:
+                        self.live = True
+                        self.started = time.time()
+                        self.clocks = 0
+                elif ("player_stop successful" in line or "ffmpeg flush at stop" in line):
+                    if self.live:
+                        self.live = False
+                        self.stopped = time.time()
+            return self.live
+
+    def duration(self):
+        end = self.stopped if not self.live else time.time()
+        return max(0.0, end - self.started) if self.started else 0.0
+
+
+SW = SessionWatch()
+
+
+def session_live(force=False):
+    """True while a sender has an open, playing session on this receiver."""
+    return SW.poll()
+
+
+# Sonos PTP: in a mixed Apple + Sonos AirPlay 2 group the *anchor* clock named
+# by SETRATEANCHORI is usually a Sonos speaker, and its PTP time base is its own
+# uptime, not Apple's. NQPTP is told (by shairport) to monitor only the sender's
+# IP, so when the group clock switches to the Sonos the published offset is
+# taken from the sender's packets and is off by hours -- shairport then sees a
+# lead time of ~350000 s for every frame and simply never plays them (silence,
+# while iOS still shows this member as selected). Teaching NQPTP to monitor the
+# Sonos speakers as well makes the offset it publishes belong to the same clock
+# the sender is using as its anchor.
+SONOS_OUIS = {
+    "94:9f:3e", "48:a6:b8", "5c:aa:fd", "78:28:ca",
+    "b8:e9:37", "d8:a8:11", "00:0e:58", "34:7e:5c",
+}
+SONOS = {"t": 0.0, "ips": []}
+
+
+def sender_ip():
+    """IPv4 address of the RTSP client that currently has a session open."""
+    try:
+        with open("/proc/net/tcp") as fh:
+            for line in fh.readlines()[1:]:
+                f = line.split()
+                if len(f) < 4 or f[3] != "01":      # 01 == ESTABLISHED
+                    continue
+                if f[1].endswith(":1B58"):          # local port 7000
+                    h = f[2].split(":")[0]
+                    b = [int(h[i:i + 2], 16) for i in (6, 4, 2, 0)]
+                    return ".".join(str(x) for x in b)
+    except Exception:
+        pass
+    return None
+
+
+def sonos_ips():
+    """IPv4 addresses of Sonos speakers on the LAN (from the neighbour table)."""
+    now = time.time()
+    if now - SONOS["t"] < 300:
+        return SONOS["ips"]
+    ips = []
+    try:
+        out = subprocess.run(["ip", "neigh"], capture_output=True, text=True, timeout=5).stdout
+        for line in out.splitlines():
+            f = line.split()
+            if len(f) >= 5 and f[3] == "lladdr" and f[0].count(".") == 3:
+                if f[4].lower()[:8] in SONOS_OUIS:
+                    ips.append(f[0])
+    except Exception as e:
+        diag("sonos peer discovery failed: %r" % (e,))
+    ips = sorted(set(ips))
+    if ips != SONOS["ips"]:
+        diag("sonos ptp peers: %s" % (",".join(ips) or "none"))
+    SONOS.update({"t": now, "ips": ips})
+    return ips
+
+
+def nqptp_set_peers(ips):
+    """Replace the client's PTP timing peer group (NQPTP control port 9000)."""
+    smi = (CFG.get("name") or "AirPlay").replace(" ", "-")
+    msg = ("/nqptp-%s T %s" % (smi, " ".join(ips))).encode()
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.sendto(msg, ("127.0.0.1", 9000))
+        diag("nqptp timing peers set to: %s" % " ".join(ips))
+    except Exception as e:
+        diag("nqptp peer update failed: %r" % (e,))
+    finally:
+        s.close()
+
+
+def _anchor_peers(cid):
+    """Peer list for the clock the sender named as the group's anchor."""
+    if not cid:
+        return []
+    mac = ":".join(cid[i:i + 2] for i in range(0, 6, 2))
+    if mac in SONOS_OUIS:
+        return sonos_ips()
+    # The anchor is the sender's own clock: shairport already registered that
+    # IP in NQPTP with its own "T" message during SETUP. Sending ours again
+    # would clear the clock table and cost ~400 ms of invalid timing right at
+    # the start of playback -- audible as a late start. Leave it alone.
+    return []
+
+
+def ptp_anchor_watch():
+    """Keep NQPTP pointed at exactly the clock the sender names as its anchor.
+
+    Derived from the airplay-esp32 reference implementation
+    (https://github.com/Kristian8606/airplay-esp32): "speakers never talk to
+    each other", timing comes only from the sender/anchor, and a clock is only
+    adopted once it has been stable for a while (its ``handover_ready`` rule:
+    new master locked + old anchor unused for 5 s). Two behaviours follow:
+
+    * the peer group is switched only after the same anchor has been named for
+      a second or more and at least 5 s have passed since the previous switch,
+      so a sender that re-announces its anchor in bursts cannot make NQPTP
+      thrash its clock table;
+    * if shairport computes an absurd lead time (the signature of a clock whose
+      PTP time base does not match the anchor -- observed at 353539 s), the peer
+      group is re-pointed immediately instead of leaving the session silent
+      forever, like the reference refusing to convert with a mismatched id.
+    """
+    pos = None
+    last_key = None
+    last_t = 0.0
+    anchor_cid = None
+    want = None
+    last_bad = 0.0
+    while True:
+        try:
+            size = os.path.getsize(LOG_PATH)
+            if pos is None:
+                pos = size
+            elif size < pos:
+                pos = 0
+            if size > pos:
+                with open(LOG_PATH, "rb") as f:
+                    f.seek(pos)
+                    chunk = f.read(size - pos)
+                pos = size
+                for line in chunk.decode("utf-8", "replace").splitlines():
+                    m = re.search(r"anchor clock ([0-9a-fA-F]{16})", line)
+                    if m:
+                        anchor_cid = m.group(1).lower()
+                        want = None
+                    lt = re.search(r"lead time for first frame \d+: ([0-9.]+) seconds", line)
+                    if lt and float(lt.group(1)) > 5.0:
+                        # Do NOT re-point NQPTP here. Every "T" clears the clock
+                        # table and resets mastership for ~400 ms, which makes a
+                        # *healthy* parallel stream resync over and over (observed:
+                        # a "reset first_packet_timestamp / sync error out of
+                        # bounds" loop every ~20 ms). Some senders open several
+                        # streams at once and one of them can carry a clock whose
+                        # time base does not match; only report it.
+                        if time.time() - last_bad > 60.0:
+                            last_bad = time.time()
+                            diag("clock mismatch seen (lead time %.0fs) - left untouched"
+                                 % float(lt.group(1)))
+            if anchor_cid:
+                ips = _anchor_peers(anchor_cid)
+                key = tuple(ips) if ips else None
+                if key and key != last_key:
+                    if want is None or want[0] != key:
+                        want = (key, ips, time.time())
+                    elif time.time() - want[2] >= 0.5 and time.time() - last_t >= 5.0:
+                        nqptp_set_peers(ips)
+                        last_key = key
+                        last_t = time.time()
+                        want = None
+        except Exception as e:
+            diag("ptp anchor watch: %r" % (e,))
+        time.sleep(0.4)
+
+
 def metadata_reader():
     """Read the shairport-sync metadata FIFO forever."""
     item_re = re.compile(r"<item>.*?</item>", re.S)
@@ -764,6 +1022,31 @@ def _esc(s):
     return str(s).replace("\\", "\\\\").replace('"', '\\"')
 
 
+def lan_ipv4():
+    """IPv4 address of the interface that carries the default route.
+
+    Used to pin the RTSP socket to IPv4 (see write_config). A UDP connect()
+    only selects a route -- it does not put a packet on the wire.
+    """
+    s = None
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.3)
+        s.connect(("192.0.2.1", 9))  # TEST-NET-1, black hole
+        ip = s.getsockname()[0]
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    finally:
+        if s is not None:
+            try:
+                s.close()
+            except Exception:
+                pass
+    return None
+
+
 def write_config():
     snap = CFG.snapshot()
     dev = snap.get("device") or default_device()
@@ -780,13 +1063,31 @@ def write_config():
         '\tinterpolation = "%s";' % _esc(snap.get("interpolation") or "auto"),
         "\tvolume_range_db = %d;" % int(snap.get("volume_range_db") or 60),
         "\taudio_backend_latency_offset_in_seconds = %.3f;" % (int(snap.get("latency_offset_ms") or 0) / 1000.0),
-        "\taudio_backend_buffer_desired_length_in_seconds = 0.4;",
+        "\taudio_backend_buffer_desired_length_in_seconds = 1.0;",
+        # A mixed Apple + Sonos AirPlay 2 group has two PTP clocks claiming the
+        # grandmaster role; NQPTP follows whichever spoke last, so "clock change"
+        # fires every few seconds. Each change invalidates NQPTP's timing for
+        # about 400 ms (a new mastership has to settle). With a 0.4 s output
+        # buffer that window underruns the DAC and the audio stops until the
+        # sender gives up on this member -- the "works at random with the Sonos
+        # group" symptom. The buffers below are one second (output) and two
+        # seconds (decoded) so a clock change is absorbed instead of heard.
+        "\taudio_decoded_buffer_desired_length_in_seconds = 1.0;",
         # AirPlay 2 groups whose clock master flips between members (e.g. a
         # Sonos and an Apple device) used to force a hard resync on every flip
         # and cut the audio. Tolerate a wider error before resyncing.
         "\tresync_threshold_in_seconds = 0.25;",
         "\tdrift_tolerance_in_seconds = 0.005;",
     ]
+    # Bind RTSP to the LAN IPv4 address only. Otherwise an iPhone connects to
+    # the host's global IPv6 (2605:...) -- a path that runs through the router
+    # and periodically dies mid-session, which is why the same song stops after
+    # a few seconds at random. IPv4 is on-link and stable, and the service is
+    # advertised over IPv4 only (avahi use-ipv6=no), so the sender falls back
+    # to it as soon as the IPv6 attempt is refused.
+    bind = snap.get("bind_address") or lan_ipv4()
+    if bind:
+        lines.insert(3, '\taddress = "%s";' % _esc(bind))
     if snap.get("stable_44k", True):
         # An iPhone sends 48k AAC in AirPlay 2, and a group (iPhone + other
         # AirPlay 2 speakers) is negotiated at 48k. Advertising "44.1k only"
@@ -921,7 +1222,7 @@ class Supervisor:
             log = open(LOG_PATH, "ab", buffering=0)
             try:
                 self.proc = subprocess.Popen(
-                    [SS_BIN, "-c", SS_CONF] + (["-v"] if CFG.get("verbose") else []),
+                    [SS_BIN, "-c", SS_CONF] + (["-vv"] if CFG.get("verbose") else []),
                     stdout=log, stderr=subprocess.STDOUT,
                     start_new_session=True,
                 )
@@ -929,13 +1230,12 @@ class Supervisor:
                 diag("spawn failed: %r" % (e,))
                 return False, "spawn failed: %s" % e
             # AirPlay 2 group timing is PTP-driven: without realtime scheduling
-            # the NQPTP timing thread gets preempted and groups fail to form
-            # (they only succeed on retry). Best effort, needs SYS_NICE.
-            try:
-                os.sched_setscheduler(self.proc.pid, os.SCHED_FIFO, os.sched_param(20))
-                diag("shairport-sync promoted to SCHED_FIFO priority 20")
-            except Exception as e:
-                diag("realtime promotion failed: %r" % (e,))
+            # the audio and PTP threads get preempted, the sender rejects a
+            # group join and an established group drops out after a few
+            # seconds. rtprio falls back to the raw syscall because musl's
+            # sched_setscheduler() wrapper returns ENOSYS in this image.
+            ok, how = rtprio.promote_threads(self.proc.pid, 20)
+            diag("shairport-sync realtime promotion: %s (%s)" % ("ok" if ok else "FAILED", how))
             self.started_at = time.time()
             self.wanted = True
             diag("shairport-sync started pid=%s" % self.proc.pid)
@@ -978,6 +1278,21 @@ class Supervisor:
         with self.lock:
             return self.proc.pid if self.proc and self.proc.poll() is None else None
 
+    def policy(self):
+        pid = self.pid()
+        return rtprio.threads_policy(pid) if pid else "not running"
+
+    def ensure_realtime(self):
+        """Re-apply SCHED_FIFO if the process lost it (or never got it)."""
+        pid = self.pid()
+        if not pid:
+            return
+        if rtprio.threads_policy(pid) == "SCHED_FIFO":
+            return
+        ok, how = rtprio.promote_threads(pid, 20)
+        diag("watchdog: re-applied realtime to shairport-sync: %s (%s)"
+             % ("ok" if ok else "FAILED", how))
+
     def ensure(self):
         """Watchdog: restart if it died unexpectedly."""
         if not self.wanted:
@@ -996,6 +1311,85 @@ class Supervisor:
 
 
 SUP = Supervisor()
+
+
+def proc_state(pid):
+    """Single-letter process state from /proc (Z = zombie)."""
+    try:
+        with open("/proc/%d/stat" % pid, "r", errors="replace") as f:
+            s = f.read()
+        return s[s.rindex(")") + 2:].split()[0]
+    except Exception:
+        return "?"
+
+
+def proc_pid_by_name(name):
+    """Live pid of `name`, ignoring (and reaping) zombies.
+
+    start.sh spawns nqptp before the panel becomes PID 1, so an nqptp that
+    exits stays as a zombie child of main.py. A zombie still reports its
+    comm as "nqptp", which used to make the watchdog believe the AirPlay 2
+    clock was present and never restart it.
+    """
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        try:
+            with open("/proc/%s/comm" % entry, "r", errors="replace") as f:
+                if f.read().strip() != name:
+                    continue
+        except Exception:
+            continue
+        if proc_state(pid) == "Z":
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except Exception:
+                pass
+            continue
+        return pid
+    return None
+
+
+NQPTP_BIN = shutil.which("nqptp") or "/usr/local/bin/nqptp"
+NQPTP_LOG = os.path.join(DATA, "nqptp.log")
+NQPTP_RETRY = {"t": 0.0}
+
+
+def nqptp_status():
+    """NQPTP is the AirPlay 2 clock; without it a group cannot be joined."""
+    pid = proc_pid_by_name("nqptp")
+    if not pid:
+        return {"running": False, "pid": None, "sched": "not running"}
+    return {"running": True, "pid": pid, "sched": rtprio.policy_of(pid)}
+
+
+def start_nqptp():
+    """Start NQPTP when the watchdog finds it gone (start.sh starts the first).
+
+    Only ever called when no nqptp process exists: a second daemon would fight
+    for UDP 319/320 and leave the clock table invalid, which is worse than an
+    absent one (playback keeps working until the next group join).
+    """
+    if os.environ.get("ENABLE_NQPTP", "1") == "0":
+        return None
+    try:
+        log = open(NQPTP_LOG, "ab", buffering=0)
+    except Exception:
+        log = subprocess.DEVNULL
+    try:
+        flags = ["-vvv"] if CFG.get("verbose") else ["-v"]
+        p = subprocess.Popen([NQPTP_BIN] + flags, stdout=log,
+                             stderr=subprocess.STDOUT, start_new_session=True)
+        time.sleep(0.6)
+        if p.poll() is not None:
+            reason = " | ".join(l.strip() for l in tail(NQPTP_LOG, 4).splitlines() if l.strip())
+            diag("watchdog: nqptp exited immediately (rc=%s): %s" % (p.returncode, reason[-400:]))
+            return None
+        return p.pid
+    except Exception as e:
+        diag("watchdog: nqptp start failed: %r" % (e,))
+        return None
 
 
 def tail(path, n=120):
@@ -1176,7 +1570,7 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     new_lat = None
                 if new_lat is not None:
-                    live = NP.snapshot().get("state") in ("playing", "paused")
+                    live = session_live()
                     if new_lat != CFG.get("latency_offset_ms") and live and not body.get("force"):
                         # Applying needs a restart, which tears the session (and
                         # any group) down. Require an explicit confirmation so
@@ -1193,7 +1587,7 @@ class Handler(BaseHTTPRequestHandler):
             if need_restart:
                 write_config()   # persist now; applied by the next (re)start
                 soft = {"latency_offset_ms", "volume_range_db", "stable_44k", "verbose"}
-                active = NP.snapshot().get("state") in ("playing", "paused")
+                active = session_live()
                 if active and not body.get("force") and set(patch) <= soft:
                     # Never tear down a live session (in a group that drops the
                     # whole group). Defer the restart until playback idles.
@@ -1291,10 +1685,14 @@ def build_state():
             "uptime": int(time.time() - SUP.started_at) if SUP.running() else 0,
             "volume_mode": VOL.mode,
             "volume_note": VOL.note,
+            "sched": SUP.policy(),
+            "realtime": SUP.policy() == "SCHED_FIFO",
         },
+        "nqptp": nqptp_status(),
         "volume": {"app": CFG.get("volume"), "reported": vol},
         "metadata_state": meta_state,
         "pending_restart": PENDING["restart"],
+        "session_live": session_live(),
         "now_playing": np,
         "devices": devs,
         "current_device": cur,
@@ -1316,14 +1714,61 @@ def main():
         while True:
             time.sleep(5)
             try:
-                if PENDING["restart"] and NP.snapshot().get("state") not in ("playing", "paused"):
+                live = session_live(force=True)
+                if PENDING["restart"] and not live:
                     diag("deferred restart: applying saved settings")
                     PENDING["restart"] = False
                     SUP.restart()
+                elif (not live and not PENDING["restart"] and SW.stopped
+                      and SW.clocks >= 8 and SW.duration() >= 20
+                      and time.time() - SW.stopped > 60
+                      and time.time() - SW.last_reset > 600):
+                    # A mixed Apple + Sonos group flips the PTP grandmaster
+                    # several times per session. Even when audio survives it,
+                    # shairport's PTP anchor / pairing state is left half
+                    # switched and the *next* group join fails ("only the
+                    # first attempt works"). Start from a clean process while
+                    # nothing is playing, so every attempt looks like a first.
+                    diag("group session ended after %d clock changes in %ds; "
+                         "restarting shairport-sync to clear PTP/session state"
+                         % (SW.clocks, int(SW.duration())))
+                    SW.last_reset = time.time()
+                    SW.stopped = 0.0
+                    SW.started = 0.0
+                    SW.clocks = 0
+                    SUP.restart()
+                elif (not live and not PENDING["restart"] and SW.stopped
+                      and SW.duration() < 5
+                      and time.time() - SW.stopped > 10
+                      and time.time() - SW.last_reset > 120):
+                    # A sender that starts a group session and tears it down
+                    # again within a second (shairport logs player_play followed
+                    # by player_stop, without ever receiving an anchor) leaves
+                    # the receiver with a half-open session; the next attempt
+                    # then fails too. Clear it while idle so the next attempt
+                    # starts from a known state.
+                    diag("aborted session after %.1fs; restarting shairport-sync"
+                         % SW.duration())
+                    SW.last_reset = time.time()
+                    SW.stopped = 0.0
+                    SW.started = 0.0
+                    SW.clocks = 0
+                    SUP.restart()
                 SUP.ensure()
+                SUP.ensure_realtime()
+                if not nqptp_status()["running"] and time.time() - NQPTP_RETRY["t"] > 30:
+                    NQPTP_RETRY["t"] = time.time()
+                    npid = start_nqptp()
+                    if npid:
+                        diag("watchdog: nqptp restarted pid=%s" % npid)
+                        # The new daemon publishes a fresh shared-memory clock
+                        # segment; shairport-sync still maps the old one, so it
+                        # has to be restarted once the pipe is idle.
+                        PENDING["restart"] = True
             except Exception as e:
                 diag("watchdog error: %r" % (e,))
     threading.Thread(target=watchdog, daemon=True).start()
+    threading.Thread(target=ptp_anchor_watch, daemon=True).start()
 
     srv = ThreadingHTTPServer(("0.0.0.0", PANEL_PORT), Handler)
     srv.daemon_threads = True

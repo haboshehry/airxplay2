@@ -236,6 +236,28 @@ If the icon does not appear in **My Apps** after saving it in the panel, the
 `x-casaos.icon` key is missing from the app's compose file — the dashboard tile reads
 the panel setting, while the My Apps row reads the compose metadata.
 
+## AirPlay 2 groups with Sonos speakers
+
+Grouping this receiver with Sonos speakers works, with two caveats that are
+properties of Sonos's AirPlay 2 implementation and not of the receiver:
+
+* **Select ZimaOS AirPlay first, then add the Sonos speakers.** With the
+  reverse order the sender tears the session down about 75 ms after
+  `player_play`, before any anchor clock is announced.
+* **The first seconds after a group forms are silent.** The sender records
+  immediately, then discards the first ~4 s of audio as expired frames while
+  the group's anchor clock settles. Expect roughly 3-4 seconds before sound.
+
+The image carries a patched `nqptp` (see
+[patches/nqptp-1.2.9-zima.patch](patches/nqptp-1.2.9-zima.patch)) that keeps
+the PTP master clock stable when a Sonos speaker joins: without it the receiver
+can compute a lead time of several hundred thousand seconds and stay silent
+forever while the sender still shows it as selected. The original binary is kept
+at `/usr/local/bin/nqptp.orig` inside the container.
+
+Operational details, measured numbers and the experiments that were rejected are
+in [NOTES-sonos-group.md](NOTES-sonos-group.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

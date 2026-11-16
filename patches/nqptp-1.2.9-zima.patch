@@ -1,0 +1,54 @@
+Keep the PTP master clock stable for AirPlay 2 groups with Sonos speakers.
+
+Applied to nqptp 1.2.9 (https://github.com/mikebrady/nqptp) before it is copied
+into the AirPlay 2 image as /usr/local/bin/nqptp.
+
+Why
+---
+In a mixed Apple + Sonos AirPlay 2 group the speakers do not agree on a single
+grandmaster. The sender's SETPEERS message makes shairport-sync point NQPTP at
+the Sonos speakers, and their PTP time base is unrelated to the sender's. NQPTP
+published the claimed grandmaster id together with an offset computed from a
+different clock, and shairport-sync shifted its anchor by
+``clock_change_offset``. Measured on this installation:
+
+    clock_change_offset = 353297563021433 ns   (~4.09 days)
+    lead time for first frame ... 353274 s     (player waits forever -> silence)
+
+The change makes NQPTP publish the clock it actually tracks, never a
+grandmaster-change offset, and refuse a clock whose time base differs from the
+current master by more than a minute.
+
+--- a/nqptp-message-handlers.c
++++ b/nqptp-message-handlers.c
+@@ -517,11 +517,24 @@
+ 
+         if (client->clock_is_active) {
+-          update_master_clock_info(client_id, clock_private_info->grandmasterIdentity,
+-                                   (const char *)&clock_private_info->ip, reception_time,
+-                                   smoothed_offset,
+-                                   clock_private_info->grandmasterChangeOffset,
+-                                   clock_private_info->mastership_start_time);
++          // Zima patch: publish the clock we track, not the grandmaster identity
++          // the sender claims -- with Sonos in the group those differ and the
++          // published offset then belongs to the wrong time base.
++          int64_t cur_offset = (int64_t)client->shared_memory->main.local_to_master_time_offset;
++          uint64_t cur_id = client->shared_memory->main.master_clock_id;
++          int64_t delta_base = (int64_t)(smoothed_offset - cur_offset);
++          if (cur_id == 0 || cur_id == clock_private_info->clock_id ||
++              (delta_base < 60000000000LL && delta_base > -60000000000LL)) {
++            // never hand a grandmaster-change offset to shairport-sync: in a
++            // mixed group that offset is the difference between two unrelated
++            // PTP time bases, and shairport-sync applies it to its anchor.
++            update_master_clock_info(client_id, clock_private_info->clock_id,
++                                     (const char *)&clock_private_info->ip, reception_time,
++                                     smoothed_offset, 0,
++                                     clock_private_info->mastership_start_time);
++          } else {
++            debug(2, "Ignoring clock %" PRIx64 " at %s: time base differs from master by %.1f s.",
++                  clock_private_info->clock_id, clock_private_info->ip,
++                  0.000000001 * (double)delta_base);
++          }
+         } else {
+           update_master_clock_info(client_id, 0, NULL, reception_time, 0, 0, 0);
+         }

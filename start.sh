@@ -47,8 +47,18 @@ if [ -z "${ENABLE_NQPTP+x}" ] || [ "${ENABLE_NQPTP:-1}" -eq 1 ]; then
   # valid"), which is what makes AirPlay 2 groups drop as soon as they form.
   pkill -x nqptp 2>/dev/null || true
   sleep 0.3
-  echo "starting nqptp"
-  (/usr/local/bin/nqptp -v >/data/nqptp.log 2>&1) &
+  # NQPTP only logs its clock work at verbosity 3, which is what a group
+  # diagnosis needs. Tie that to the panel's "verbose" switch so the normal
+  # daemon stays quiet, and keep the log from growing without bound.
+  if [ -f /data/nqptp.log ] && [ "$(wc -c < /data/nqptp.log)" -gt 2000000 ]; then
+    mv -f /data/nqptp.log /data/nqptp.log.1
+  fi
+  nqptp_flags="-v"
+  if python3 -c "import json,sys; sys.exit(0 if json.load(open('/data/config.json')).get('verbose') else 1)" 2>/dev/null; then
+    nqptp_flags="-vvv"
+  fi
+  echo "starting nqptp ($nqptp_flags)"
+  (/usr/local/bin/nqptp $nqptp_flags >/data/nqptp.log 2>&1) &
 fi
 
 # Wait for avahi, but never block forever (host mDNS may already own 5353).
